@@ -20,6 +20,13 @@
 
 ---
 
+---
+
+## Docker script
+
+Run docker.sh to initalize database, build containers, and then start them automatically
+```./docker.sh```
+
 ## Automatic import
 
 Download the required data, initialize the database and start nominatim in one go
