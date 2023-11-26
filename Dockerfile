@@ -32,6 +32,8 @@ RUN true \
         libboost-filesystem-dev \
         liblua5.4-dev \
         nlohmann-json3-dev \
+        # Aria2 Torrent Client
+        aria2 \
         # PostgreSQL.
         postgresql-contrib \
         postgresql-server-dev-14 \
