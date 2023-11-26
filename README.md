@@ -1,111 +1,246 @@
-# Nominatim Docker
+# Nominatim Docker (Nominatim version 4.3)
 
-100% working container for [Nominatim](https://github.com/openstreetmap/Nominatim).
+## Table of contents
 
-![GitHub Workflow Status](https://img.shields.io/github/actions/workflow/status/mediagis/nominatim-docker/ci.yml?branch=master&style=flat-square) ![Github All Contributors](https://img.shields.io/github/all-contributors/mediagis/nominatim-docker?style=flat-square) ![Docker Pulls](https://img.shields.io/docker/pulls/mediagis/nominatim?style=flat-square) ![Docker Image Size with architecture (latest by date/latest semver)](https://img.shields.io/docker/image-size/mediagis/nominatim?style=flat-square)
+  - [Automatic import](#automatic-import)
+  - [Configuration](#configuration)
+    - [General Parameters](#general-parameters)
+    - [PostgreSQL Tuning](#postgresql-tuning)
+    - [Import Style](#import-style)
+    - [Flatnode files](#flatnode-files)
+    - [Configuration Example](#configuration-example)
+  - [Persistent container data](#persistent-container-data)
+  - [OpenStreetMap Data Extracts](#openstreetmap-data-extracts)
+  - [Updating the database](#updating-the-database)
+  - [Custom PBF Files](#custom-pbf-files)
+  - [Importance Dumps, Postcode Data, and Tiger Addresses](#importance-dumps-postcode-data-and-tiger-addresses)
+  - [Development](#development)
+  - [Docker Compose](#docker-compose)
+  - [Assorted use cases documented in issues](#assorted-use-cases-documented-in-issues)
 
-# How to use
+---
 
-See relevant installation and usage instructions for each version in the ```<version>/README.md``` file.
+## Automatic import
 
-# Supported Nominatim versions #
+Download the required data, initialize the database and start nominatim in one go
 
-- [`4.3.2`, `4.3`](https://github.com/mediagis/nominatim-docker/tree/master/4.3)
-- [`4.2.4`, `4.2`](https://github.com/mediagis/nominatim-docker/tree/master/4.2)
+```sh
+docker run -it \
+  -e PBF_URL=https://download.geofabrik.de/europe/monaco-latest.osm.pbf \
+  -e REPLICATION_URL=https://download.geofabrik.de/europe/monaco-updates/ \
+  -p 8080:8080 \
+  --name nominatim \
+  mediagis/nominatim:4.3
+```
 
-# Deprecated Nominatim versions #
+Port 8080 is the nominatim HTTP API port and 5432 is the Postgres port, which you may or may not want to expose.
 
-- [`4.1.2`, `4.1`](https://github.com/mediagis/nominatim-docker/tree/master/4.1)
-- [`4.0.2`, `4.0`](https://github.com/mediagis/nominatim-docker/tree/master/4.0)
-- [`3.7.3`, `3.7`](https://github.com/mediagis/nominatim-docker/tree/master/3.7)
-- [`3.6.0`, `3.6`](https://github.com/mediagis/nominatim-docker/tree/master/3.6)
-- [`3.5.2`, `3.5`](https://github.com/mediagis/nominatim-docker/tree/master/3.5)
-- [`3.4.2`, `3.4`](https://github.com/mediagis/nominatim-docker/tree/master/3.4)
-- [`3.3.1`, `3.3`](https://github.com/mediagis/nominatim-docker/tree/master/3.3)
-- [`3.2.1`, `3.2`](https://github.com/mediagis/nominatim-docker/tree/master/3.2)
-- [`3.1.0`, `3.1`](https://github.com/mediagis/nominatim-docker/tree/master/3.1)
-- [`3.0.1`, `3.0`](https://github.com/mediagis/nominatim-docker/tree/master/3.0)
-- [`2.5.1`, `2.5`](https://github.com/mediagis/nominatim-docker/tree/master/2.5)
+If you want to check that your data import was successful, you can use the API with the following URL: http://localhost:8080/search.php?q=avenue%20pasteur
+
+## Configuration
+
+### General Parameters
+
+The following environment variables are available for configuration:
+
+- `PBF_URL`: Which [OSM extract](#openstreetmap-data-extracts) to download and import. It cannot be used together with `PBF_PATH`.
+  Check [https://download.geofabrik.de](https://download.geofabrik.de) 
+  Since the download speed is restricted at Geofabrik, there is a recommended list of mirrors for importing the full planet at [OSM Wiki](https://wiki.openstreetmap.org/wiki/Planet.osm#Planet.osm_mirrors).
+  At the mirror sites you can find the folder /planet which contains the planet-latest.osm.pbf
+  and often a `/replication` folder for the `REPLICATION_URL`.
+- `PBF_PATH`: Which [OSM extract](#openstreetmap-data-extracts) to import from the .pbf file inside the container. It cannot be used together with `PBF_URL`.
+- `REPLICATION_URL`: Where to get updates from. For example Geofabrik's update for the Europe extract are available at `https://download.geofabrik.de/europe-updates/`
+Other places at Geofabrik follow the pattern `https://download.geofabrik.de/$CONTINENT/$COUNTRY-updates/`
+ 
+- `REPLICATION_UPDATE_INTERVAL`: How often upstream publishes diffs (in seconds, default: `86400`). _Requires `REPLICATION_URL` to be set._
+- `REPLICATION_RECHECK_INTERVAL`: How long to sleep if no update found yet (in seconds, default: `900`). _Requires `REPLICATION_URL` to be set._
+- `UPDATE_MODE`: How to run replication to [update nominatim data](https://nominatim.org/release-docs/4.3.1/admin/Update/#updating-nominatim). Options: `continuous`/`once`/`catch-up`/`none` (default: `none`)
+- `FREEZE`: Freeze database and disable dynamic updates to save space. (default: `false`)
+- `REVERSE_ONLY`: If you only want to use the Nominatim database for reverse lookups. (default: `false`)
+- `IMPORT_WIKIPEDIA`: Whether to download and import the Wikipedia importance dumps (`true`) or path to importance dump in the container. Importance dumps improve the scoring of results. On a beefy 10 core server, this takes around 5 minutes. (default: `false`)
+- `IMPORT_US_POSTCODES`: Whether to download and import the US postcode dump (`true`) or path to US postcode dump in the container. (default: `false`)
+- `IMPORT_GB_POSTCODES`: Whether to download and import the GB postcode dump (`true`) or path to GB postcode dump in the container. (default: `false`)
+- `IMPORT_TIGER_ADDRESSES`: Whether to download and import the Tiger address data (`true`) or path to a preprocessed Tiger address set in the container. (default: `false`)
+- `THREADS`: How many threads should be used to import (default: number of processing units available to the current process via `nproc`)
+- `NOMINATIM_PASSWORD`: The password to connect to the database with (default: `qaIACxO6wMR3`)
+
+The following run parameters are available for configuration:
+
+- `shm-size`: Size of the tmpfs in Docker, for bigger imports (e.g. Europe) this needs to be set to at least 1GB or more. Half the size of your available RAM is recommended. (default: `64M`)
+
+### PostgreSQL Tuning
+
+The following environment variables are available to tune PostgreSQL:
+
+- `POSTGRES_SHARED_BUFFERS` (default: `2GB`)
+- `POSTGRES_MAINTENANCE_WORK_MEM` (default: `10GB`)
+- `POSTGRES_AUTOVACUUM_WORK_MEM` (default: `2GB`)
+- `POSTGRES_WORK_MEM` (default: `50MB`)
+- `POSTGRES_EFFECTIVE_CACHE_SIZE` (default: `24GB`)
+- `POSTGRES_SYNCHRONOUS_COMMIT` (default: `off`)
+- `POSTGRES_MAX_WAL_SIZE` (default: `1GB`)
+- `POSTGRES_CHECKPOINT_TIMEOUT` (default: `10min`)
+- `POSTGRES_CHECKPOINT_COMPLETION_TARGET` (default: `0.9`)
+
+See https://nominatim.org/release-docs/4.3.1/admin/Installation/#tuning-the-postgresql-database for more details on those settings.
+
+### Import Style
+
+The import style can be modified through an environment variable :
+
+- `IMPORT_STYLE` (default: `full`)
+
+Available options are :
+
+- `admin`: Only import administrative boundaries and places.
+- `street`: Like the admin style but also adds streets.
+- `address`: Import all data necessary to compute addresses down to house number level.
+- `full`: Default style that also includes points of interest.
+- `extratags`: Like the full style but also adds most of the OSM tags into the extratags column.
+
+See https://nominatim.org/release-docs/4.3.1/admin/Import/#filtering-imported-data for more details on those styles.
+
+### Flatnode files
+
+In addition you can also mount a volume / bind-mount on `/nominatim/flatnode` (see: Persistent container data) to use flatnode storage. This is advised for bigger imports (Europe, North America etc.), see: https://nominatim.org/release-docs/4.3.0/admin/Import/#flatnode-files. If the mount is available for the container, the flatnode configuration is automatically set and used.
+  
+```sh
+docker run -it \
+  -v nominatim-flatnode:/nominatim/flatnode \
+  -e PBF_URL=https://download.geofabrik.de/europe/monaco-latest.osm.pbf \
+  -e REPLICATION_URL=https://download.geofabrik.de/europe/monaco-updates/ \
+  -p 8080:8080 \
+  --name nominatim \
+  mediagis/nominatim:4.3
+```
+
+### Configuration Example
+
+Here you can find a [configuration example](example.md) for all flags you can use for the container creation.
 
 
-**Caution:** Upgrading between Nominatim versions (e.g., 4.0 to 4.1) without reimporting your data may not be directly supported by the image. Always check the Nominatim migration guide [https://www.nominatim.org/release-docs/latest/admin/Migration/](https://www.nominatim.org/release-docs/latest/admin/Migration/).
+## Persistent container data
 
-# Contributors
+If you want to keep your imported data across deletion and recreation of your container, make the following folder a volume:
 
-Thanks goes to these wonderful people ([emoji key](https://allcontributors.org/docs/en/emoji-key)):
+- `/var/lib/postgresql/14/main` is the storage location of the Postgres database & holds the state about whether the import was successful
+- `/nominatim/flatnode` is the storage location of the flatnode file.
 
-<!-- ALL-CONTRIBUTORS-LIST:START - Do not remove or modify this section -->
-<!-- prettier-ignore-start -->
-<!-- markdownlint-disable -->
-<table>
-  <tbody>
-    <tr>
-      <td align="center" valign="top" width="16.66%"><a href="https://www.linkedin.com/in/winsent/"><img src="https://avatars.githubusercontent.com/u/2316328?v=4?s=100" width="100px;" alt="Andrew"/><br /><sub><b>Andrew</b></sub></a><br /><a href="https://github.com/mediagis/nominatim-docker/commits?author=winsento" title="Code">💻</a> <a href="https://github.com/mediagis/nominatim-docker/commits?author=winsento" title="Documentation">📖</a></td>
-      <td align="center" valign="top" width="16.66%"><a href="https://github.com/dlucia"><img src="https://avatars3.githubusercontent.com/u/1665623?v=4?s=100" width="100px;" alt="Donato Lucia"/><br /><sub><b>Donato Lucia</b></sub></a><br /><a href="https://github.com/mediagis/nominatim-docker/commits?author=dlucia" title="Code">💻</a></td>
-      <td align="center" valign="top" width="16.66%"><a href="https://github.com/geomark"><img src="https://avatars1.githubusercontent.com/u/1500692?v=4?s=100" width="100px;" alt="Georgios Markakis"/><br /><sub><b>Georgios Markakis</b></sub></a><br /><a href="https://github.com/mediagis/nominatim-docker/commits?author=geomark" title="Documentation">📖</a></td>
-      <td align="center" valign="top" width="16.66%"><a href="https://github.com/philipkozeny"><img src="https://avatars1.githubusercontent.com/u/16721635?v=4?s=100" width="100px;" alt="Philip Kozeny"/><br /><sub><b>Philip Kozeny</b></sub></a><br /><a href="#infra-philipkozeny" title="Infrastructure (Hosting, Build-Tools, etc)">🚇</a> <a href="https://github.com/mediagis/nominatim-docker/commits?author=philipkozeny" title="Code">💻</a> <a href="https://github.com/mediagis/nominatim-docker/commits?author=philipkozeny" title="Tests">⚠️</a> <a href="https://github.com/mediagis/nominatim-docker/pulls?q=is%3Apr+reviewed-by%3Aphilipkozeny" title="Reviewed Pull Requests">👀</a> <a href="https://github.com/mediagis/nominatim-docker/commits?author=philipkozeny" title="Documentation">📖</a></td>
-      <td align="center" valign="top" width="16.66%"><a href="https://www.therek.net/"><img src="https://avatars2.githubusercontent.com/u/89052?v=4?s=100" width="100px;" alt="Cezary Morga"/><br /><sub><b>Cezary Morga</b></sub></a><br /><a href="https://github.com/mediagis/nominatim-docker/commits?author=therek" title="Code">💻</a></td>
-      <td align="center" valign="top" width="16.66%"><a href="https://github.com/thomasnordquist"><img src="https://avatars0.githubusercontent.com/u/7721625?v=4?s=100" width="100px;" alt="Thomas Nordquist"/><br /><sub><b>Thomas Nordquist</b></sub></a><br /><a href="https://github.com/mediagis/nominatim-docker/commits?author=thomasnordquist" title="Code">💻</a></td>
-    </tr>
-    <tr>
-      <td align="center" valign="top" width="16.66%"><a href="https://keybase.io/davkorss"><img src="https://avatars0.githubusercontent.com/u/5597595?v=4?s=100" width="100px;" alt="Andrey Ruíz"/><br /><sub><b>Andrey Ruíz</b></sub></a><br /><a href="https://github.com/mediagis/nominatim-docker/commits?author=davkorss" title="Documentation">📖</a></td>
-      <td align="center" valign="top" width="16.66%"><a href="https://github.com/UntitleDude"><img src="https://avatars2.githubusercontent.com/u/14983691?v=4?s=100" width="100px;" alt="UntitleDude"/><br /><sub><b>UntitleDude</b></sub></a><br /><a href="https://github.com/mediagis/nominatim-docker/commits?author=UntitleDude" title="Code">💻</a></td>
-      <td align="center" valign="top" width="16.66%"><a href="https://www.linkedin.com/in/jmcker"><img src="https://avatars3.githubusercontent.com/u/25001741?v=4?s=100" width="100px;" alt="Jack McKernan"/><br /><sub><b>Jack McKernan</b></sub></a><br /><a href="https://github.com/mediagis/nominatim-docker/commits?author=jmcker" title="Code">💻</a></td>
-      <td align="center" valign="top" width="16.66%"><a href="https://twitter.com/mtmthemovie"><img src="https://avatars1.githubusercontent.com/u/3727288?v=4?s=100" width="100px;" alt="mtmail"/><br /><sub><b>mtmail</b></sub></a><br /><a href="https://github.com/mediagis/nominatim-docker/commits?author=mtmail" title="Documentation">📖</a> <a href="https://github.com/mediagis/nominatim-docker/commits?author=mtmail" title="Code">💻</a> <a href="#question-mtmail" title="Answering Questions">💬</a> <a href="https://github.com/mediagis/nominatim-docker/pulls?q=is%3Apr+reviewed-by%3Amtmail" title="Reviewed Pull Requests">👀</a></td>
-      <td align="center" valign="top" width="16.66%"><a href="https://angel.co/eSlider"><img src="https://avatars3.githubusercontent.com/u/1188335?v=4?s=100" width="100px;" alt="Andrey Oblivantsev"/><br /><sub><b>Andrey Oblivantsev</b></sub></a><br /><a href="https://github.com/mediagis/nominatim-docker/commits?author=eSlider" title="Code">💻</a></td>
-      <td align="center" valign="top" width="16.66%"><a href="https://www.linkedin.com/in/simoneromano92/"><img src="https://avatars2.githubusercontent.com/u/6860423?v=4?s=100" width="100px;" alt="Simone"/><br /><sub><b>Simone</b></sub></a><br /><a href="https://github.com/mediagis/nominatim-docker/commits?author=sromano1992" title="Code">💻</a></td>
-    </tr>
-    <tr>
-      <td align="center" valign="top" width="16.66%"><a href="https://github.com/DuncanMackintosh"><img src="https://avatars0.githubusercontent.com/u/4966417?v=4?s=100" width="100px;" alt="DuncanMackintosh"/><br /><sub><b>DuncanMackintosh</b></sub></a><br /><a href="https://github.com/mediagis/nominatim-docker/commits?author=DuncanMackintosh" title="Code">💻</a> <a href="https://github.com/mediagis/nominatim-docker/commits?author=DuncanMackintosh" title="Documentation">📖</a></td>
-      <td align="center" valign="top" width="16.66%"><a href="http://iiroalhonen.com"><img src="https://avatars2.githubusercontent.com/u/18322926?v=4?s=100" width="100px;" alt="Iiro Alhonen"/><br /><sub><b>Iiro Alhonen</b></sub></a><br /><a href="https://github.com/mediagis/nominatim-docker/commits?author=Iikeli" title="Documentation">📖</a></td>
-      <td align="center" valign="top" width="16.66%"><a href="https://www.ufoproger.ru"><img src="https://avatars3.githubusercontent.com/u/212711?v=4?s=100" width="100px;" alt="Mikhail Snetkov"/><br /><sub><b>Mikhail Snetkov</b></sub></a><br /><a href="https://github.com/mediagis/nominatim-docker/commits?author=ufoproger" title="Code">💻</a></td>
-      <td align="center" valign="top" width="16.66%"><a href="https://github.com/FritschAuctores"><img src="https://avatars2.githubusercontent.com/u/43264099?v=4?s=100" width="100px;" alt="FritschAuctores"/><br /><sub><b>FritschAuctores</b></sub></a><br /><a href="https://github.com/mediagis/nominatim-docker/commits?author=FritschAuctores" title="Code">💻</a></td>
-      <td align="center" valign="top" width="16.66%"><a href="https://github.com/rebos"><img src="https://avatars.githubusercontent.com/u/490798?v=4?s=100" width="100px;" alt="rebos"/><br /><sub><b>rebos</b></sub></a><br /><a href="https://github.com/mediagis/nominatim-docker/commits?author=rebos" title="Code">💻</a></td>
-      <td align="center" valign="top" width="16.66%"><a href="https://leonard.io/blog/"><img src="https://avatars.githubusercontent.com/u/151346?v=4?s=100" width="100px;" alt="Leonard Ehrenfried"/><br /><sub><b>Leonard Ehrenfried</b></sub></a><br /><a href="#infra-leonardehrenfried" title="Infrastructure (Hosting, Build-Tools, etc)">🚇</a> <a href="https://github.com/mediagis/nominatim-docker/commits?author=leonardehrenfried" title="Code">💻</a> <a href="https://github.com/mediagis/nominatim-docker/commits?author=leonardehrenfried" title="Tests">⚠️</a> <a href="https://github.com/mediagis/nominatim-docker/pulls?q=is%3Apr+reviewed-by%3Aleonardehrenfried" title="Reviewed Pull Requests">👀</a> <a href="https://github.com/mediagis/nominatim-docker/commits?author=leonardehrenfried" title="Documentation">📖</a></td>
-    </tr>
-    <tr>
-      <td align="center" valign="top" width="16.66%"><a href="https://roelandtn.frama.io/"><img src="https://avatars.githubusercontent.com/u/17683898?v=4?s=100" width="100px;" alt="Nicolas Roelandt"/><br /><sub><b>Nicolas Roelandt</b></sub></a><br /><a href="https://github.com/mediagis/nominatim-docker/commits?author=Bakaniko" title="Documentation">📖</a> <a href="https://github.com/mediagis/nominatim-docker/commits?author=Bakaniko" title="Code">💻</a> <a href="https://github.com/mediagis/nominatim-docker/commits?author=Bakaniko" title="Tests">⚠️</a></td>
-      <td align="center" valign="top" width="16.66%"><a href="https://github.com/Sacerdoss"><img src="https://avatars.githubusercontent.com/u/22632241?v=4?s=100" width="100px;" alt="Sacerdoss"/><br /><sub><b>Sacerdoss</b></sub></a><br /><a href="https://github.com/mediagis/nominatim-docker/commits?author=Sacerdoss" title="Documentation">📖</a></td>
-      <td align="center" valign="top" width="16.66%"><a href="https://github.com/sake"><img src="https://avatars.githubusercontent.com/u/154311?v=4?s=100" width="100px;" alt="Tobias Wich"/><br /><sub><b>Tobias Wich</b></sub></a><br /><a href="https://github.com/mediagis/nominatim-docker/commits?author=sake" title="Documentation">📖</a> <a href="https://github.com/mediagis/nominatim-docker/commits?author=sake" title="Code">💻</a></td>
-      <td align="center" valign="top" width="16.66%"><a href="https://github.com/aclowkey"><img src="https://avatars.githubusercontent.com/u/2061017?v=4?s=100" width="100px;" alt="Alex Chaplianka"/><br /><sub><b>Alex Chaplianka</b></sub></a><br /><a href="https://github.com/mediagis/nominatim-docker/commits?author=aclowkey" title="Documentation">📖</a></td>
-      <td align="center" valign="top" width="16.66%"><a href="https://github.com/gmalenko"><img src="https://avatars.githubusercontent.com/u/6521413?v=4?s=100" width="100px;" alt="Idris Hayward"/><br /><sub><b>Idris Hayward</b></sub></a><br /><a href="https://github.com/mediagis/nominatim-docker/commits?author=gmalenko" title="Documentation">📖</a></td>
-      <td align="center" valign="top" width="16.66%"><a href="https://github.com/karlvr"><img src="https://avatars.githubusercontent.com/u/1086005?v=4?s=100" width="100px;" alt="Karl von Randow"/><br /><sub><b>Karl von Randow</b></sub></a><br /><a href="https://github.com/mediagis/nominatim-docker/commits?author=karlvr" title="Documentation">📖</a></td>
-    </tr>
-    <tr>
-      <td align="center" valign="top" width="16.66%"><a href="https://github.com/mlechner"><img src="https://avatars.githubusercontent.com/u/1194826?v=4?s=100" width="100px;" alt="Marco Lechner"/><br /><sub><b>Marco Lechner</b></sub></a><br /><a href="https://github.com/mediagis/nominatim-docker/commits?author=mlechner" title="Documentation">📖</a></td>
-      <td align="center" valign="top" width="16.66%"><a href="https://github.com/mattegawel"><img src="https://avatars.githubusercontent.com/u/14986712?v=4?s=100" width="100px;" alt="Mateusz Gaweł"/><br /><sub><b>Mateusz Gaweł</b></sub></a><br /><a href="https://github.com/mediagis/nominatim-docker/commits?author=mattegawel" title="Code">💻</a></td>
-      <td align="center" valign="top" width="16.66%"><a href="http://www.forum-software.org/"><img src="https://avatars.githubusercontent.com/u/1044941?v=4?s=100" width="100px;" alt="Nicolas Ternisien"/><br /><sub><b>Nicolas Ternisien</b></sub></a><br /><a href="https://github.com/mediagis/nominatim-docker/commits?author=lastnico" title="Documentation">📖</a></td>
-      <td align="center" valign="top" width="16.66%"><a href="https://github.com/oschlueter"><img src="https://avatars.githubusercontent.com/u/10252511?v=4?s=100" width="100px;" alt="oschlueter"/><br /><sub><b>oschlueter</b></sub></a><br /><a href="https://github.com/mediagis/nominatim-docker/commits?author=oschlueter" title="Code">💻</a></td>
-      <td align="center" valign="top" width="16.66%"><a href="https://github.com/timnon"><img src="https://avatars.githubusercontent.com/u/5597397?v=4?s=100" width="100px;" alt="Tim Nonner"/><br /><sub><b>Tim Nonner</b></sub></a><br /><a href="https://github.com/mediagis/nominatim-docker/commits?author=timnon" title="Code">💻</a></td>
-      <td align="center" valign="top" width="16.66%"><a href="https://github.com/thlor"><img src="https://avatars.githubusercontent.com/u/6570020?v=4?s=100" width="100px;" alt="thlor"/><br /><sub><b>thlor</b></sub></a><br /><a href="https://github.com/mediagis/nominatim-docker/commits?author=thlor" title="Code">💻</a> <a href="https://github.com/mediagis/nominatim-docker/commits?author=thlor" title="Documentation">📖</a></td>
-    </tr>
-    <tr>
-      <td align="center" valign="top" width="16.66%"><a href="https://github.com/mogita"><img src="https://avatars.githubusercontent.com/u/1173069?v=4?s=100" width="100px;" alt="Yun Wang"/><br /><sub><b>Yun Wang</b></sub></a><br /><a href="https://github.com/mediagis/nominatim-docker/commits?author=mogita" title="Documentation">📖</a> <a href="https://github.com/mediagis/nominatim-docker/commits?author=mogita" title="Code">💻</a></td>
-      <td align="center" valign="top" width="16.66%"><a href="https://github.com/Stefanic"><img src="https://avatars.githubusercontent.com/u/4499284?v=4?s=100" width="100px;" alt="Stefanic"/><br /><sub><b>Stefanic</b></sub></a><br /><a href="https://github.com/mediagis/nominatim-docker/commits?author=Stefanic" title="Code">💻</a> <a href="https://github.com/mediagis/nominatim-docker/commits?author=Stefanic" title="Documentation">📖</a></td>
-      <td align="center" valign="top" width="16.66%"><a href="https://github.com/xpoinsard"><img src="https://avatars.githubusercontent.com/u/6130463?v=4?s=100" width="100px;" alt="xpoinsard"/><br /><sub><b>xpoinsard</b></sub></a><br /><a href="https://github.com/mediagis/nominatim-docker/commits?author=xpoinsard" title="Documentation">📖</a> <a href="https://github.com/mediagis/nominatim-docker/commits?author=xpoinsard" title="Code">💻</a></td>
-      <td align="center" valign="top" width="16.66%"><a href="https://github.com/Bartizan"><img src="https://avatars.githubusercontent.com/u/6322553?v=4?s=100" width="100px;" alt="Bartizan"/><br /><sub><b>Bartizan</b></sub></a><br /><a href="https://github.com/mediagis/nominatim-docker/commits?author=Bartizan" title="Code">💻</a> <a href="https://github.com/mediagis/nominatim-docker/commits?author=Bartizan" title="Documentation">📖</a> <a href="https://github.com/mediagis/nominatim-docker/commits?author=Bartizan" title="Tests">⚠️</a></td>
-      <td align="center" valign="top" width="16.66%"><a href="https://github.com/galewis2"><img src="https://avatars.githubusercontent.com/u/62433564?v=4?s=100" width="100px;" alt="galewis2"/><br /><sub><b>galewis2</b></sub></a><br /><a href="https://github.com/mediagis/nominatim-docker/commits?author=galewis2" title="Code">💻</a></td>
-      <td align="center" valign="top" width="16.66%"><a href="https://github.com/TurtIeSocks"><img src="https://avatars.githubusercontent.com/u/58572875?v=4?s=100" width="100px;" alt="Derick M."/><br /><sub><b>Derick M.</b></sub></a><br /><a href="https://github.com/mediagis/nominatim-docker/commits?author=TurtIeSocks" title="Code">💻</a> <a href="https://github.com/mediagis/nominatim-docker/commits?author=TurtIeSocks" title="Documentation">📖</a> <a href="https://github.com/mediagis/nominatim-docker/commits?author=TurtIeSocks" title="Tests">⚠️</a></td>
-    </tr>
-    <tr>
-      <td align="center" valign="top" width="16.66%"><a href="https://github.com/norcis"><img src="https://avatars.githubusercontent.com/u/1047487?v=4?s=100" width="100px;" alt="norcis"/><br /><sub><b>norcis</b></sub></a><br /><a href="https://github.com/mediagis/nominatim-docker/commits?author=norcis" title="Code">💻</a></td>
-      <td align="center" valign="top" width="16.66%"><a href="http://rapsody.com/"><img src="https://avatars.githubusercontent.com/u/7005?v=4?s=100" width="100px;" alt="SClo"/><br /><sub><b>SClo</b></sub></a><br /><a href="https://github.com/mediagis/nominatim-docker/commits?author=sclo" title="Code">💻</a> <a href="https://github.com/mediagis/nominatim-docker/commits?author=sclo" title="Documentation">📖</a></td>
-      <td align="center" valign="top" width="16.66%"><a href="https://github.com/poliquin"><img src="https://avatars.githubusercontent.com/u/360123?v=4?s=100" width="100px;" alt="Chris"/><br /><sub><b>Chris</b></sub></a><br /><a href="https://github.com/mediagis/nominatim-docker/commits?author=poliquin" title="Code">💻</a> <a href="https://github.com/mediagis/nominatim-docker/commits?author=poliquin" title="Documentation">📖</a></td>
-      <td align="center" valign="top" width="16.66%"><a href="https://github.com/iAlex97"><img src="https://avatars.githubusercontent.com/u/12383594?v=4?s=100" width="100px;" alt="iAlex97"/><br /><sub><b>iAlex97</b></sub></a><br /><a href="https://github.com/mediagis/nominatim-docker/commits?author=iAlex97" title="Code">💻</a> <a href="https://github.com/mediagis/nominatim-docker/commits?author=iAlex97" title="Tests">⚠️</a></td>
-      <td align="center" valign="top" width="16.66%"><a href="http://bugsquash.blogspot.com/"><img src="https://avatars.githubusercontent.com/u/95194?v=4?s=100" width="100px;" alt="Mauricio Scheffer"/><br /><sub><b>Mauricio Scheffer</b></sub></a><br /><a href="https://github.com/mediagis/nominatim-docker/commits?author=mausch" title="Code">💻</a></td>
-      <td align="center" valign="top" width="16.66%"><a href="https://github.com/anthropos9"><img src="https://avatars.githubusercontent.com/u/3867685?v=4?s=100" width="100px;" alt="Sean Dean"/><br /><sub><b>Sean Dean</b></sub></a><br /><a href="https://github.com/mediagis/nominatim-docker/commits?author=anthropos9" title="Documentation">📖</a></td>
-    </tr>
-    <tr>
-      <td align="center" valign="top" width="16.66%"><a href="https://github.com/pgassmann"><img src="https://avatars.githubusercontent.com/u/460192?v=4?s=100" width="100px;" alt="Philipp Gassmann"/><br /><sub><b>Philipp Gassmann</b></sub></a><br /><a href="https://github.com/mediagis/nominatim-docker/commits?author=pgassmann" title="Documentation">📖</a> <a href="https://github.com/mediagis/nominatim-docker/commits?author=pgassmann" title="Code">💻</a> <a href="https://github.com/mediagis/nominatim-docker/commits?author=pgassmann" title="Tests">⚠️</a></td>
-      <td align="center" valign="top" width="16.66%"><a href="https://github.com/saddfox"><img src="https://avatars.githubusercontent.com/u/48035291?v=4?s=100" width="100px;" alt="saddfox"/><br /><sub><b>saddfox</b></sub></a><br /><a href="https://github.com/mediagis/nominatim-docker/commits?author=saddfox" title="Documentation">📖</a> <a href="https://github.com/mediagis/nominatim-docker/commits?author=saddfox" title="Code">💻</a> <a href="https://github.com/mediagis/nominatim-docker/commits?author=saddfox" title="Tests">⚠️</a></td>
-      <td align="center" valign="top" width="16.66%"><a href="https://github.com/gsg-git"><img src="https://avatars.githubusercontent.com/u/92863111?v=4?s=100" width="100px;" alt="gsg-git"/><br /><sub><b>gsg-git</b></sub></a><br /><a href="https://github.com/mediagis/nominatim-docker/commits?author=gsg-git" title="Documentation">📖</a></td>
-    </tr>
-  </tbody>
-</table>
+So if you want to be able to kill your container and start it up again with all the data still present use the following command:
 
-<!-- markdownlint-restore -->
-<!-- prettier-ignore-end -->
+```sh
+docker run -it --shm-size=1g \
+  -e PBF_URL=https://download.geofabrik.de/europe/monaco-latest.osm.pbf \
+  -e REPLICATION_URL=https://download.geofabrik.de/europe/monaco-updates/ \
+  -e IMPORT_WIKIPEDIA=false \
+  -e NOMINATIM_PASSWORD=very_secure_password \
+  -v nominatim-data:/var/lib/postgresql/14/main \
+  -p 8080:8080 \
+  --name nominatim \
+  mediagis/nominatim:4.3
+```
 
-<!-- ALL-CONTRIBUTORS-LIST:END -->
+## OpenStreetMap Data Extracts
 
-This project follows the [all-contributors](https://github.com/all-contributors/all-contributors) specification. Contributions of any kind welcome!
+Nominatim imports OpenStreetMap (OSM) data extracts. The source of the data can be specified with one of the following environment variables:
+
+- `PBF_URL` variable specifies the URL. The data is downloaded during initialization, imported and removed from disk afterwards. The data extracts can be freely downloaded, e.g., from [Geofabrik's server](https://download.geofabrik.de).
+- `PBF_PATH` variable specifies the path to the mounted OSM extracts data inside the container. No .pbf file is removed after initialization.
+
+It is not possible to define both `PBF_URL` and `PBF_PATH` sources.
+
+The replication update can be performed only via HTTP.
+
+A sample of `PBF_PATH` variable usage is:
+
+```sh
+docker run -it \
+  -e PBF_PATH=/nominatim/data/monaco-latest.osm.pbf \
+  -e REPLICATION_URL=https://download.geofabrik.de/europe/monaco-updates/ \
+  -p 8080:8080 \
+  -v /osm-maps/data:/nominatim/data \
+  --name nominatim \
+  mediagis/nominatim:4.3
+```
+
+where the _/osm-maps/data/_ directory contains _monaco-latest.osm.pbf_ file that is mounted and available in container: _/nominatim/data/monaco-latest.osm.pbf_
+
+## Updating the database
+
+Full documentation for Nominatim update available [here](https://nominatim.org/release-docs/4.3.1/admin/Update/). For a list of other methods see the output of:
+
+```sh
+docker exec -it nominatim sudo -u nominatim nominatim replication --help
+```
+
+The following command will keep updating the database forever:
+
+```sh
+docker exec -it nominatim sudo -u nominatim nominatim replication --project-dir /nominatim
+```
+
+If there are no updates available this process will sleep for 15 minutes and try again.
+
+## Custom PBF Files
+
+If you want your Nominatim container to host multiple areas from Geofabrik, you can use a tool, such as [Osmium](https://osmcode.org/osmium-tool/manual.html), to merge multiple PBF files into one.
+
+```sh
+docker run -it \
+  -e PBF_PATH=/nominatim/data/merged.osm.pbf \
+  -p 8080:8080 \
+  -v /osm-maps/data:/nominatim/data \
+  --name nominatim \
+  mediagis/nominatim:4.3
+```
+
+where the _/osm-maps/data/_ directory contains _merged.osm.pbf_ file that is mounted and available in container: _/nominatim/data/merged.osm.pbf_
+
+## Importance Dumps, Postcode Data, and Tiger Addresses
+
+Including the Wikipedia importance dumps, postcode files, and Tiger address data can improve results. These can be automatically downloaded by setting the appropriate options (see above) to `true`. Alternatively, they can be imported from local files by specifying a file path (relative to the container), similar to how `PBF_PATH` is used. For example:
+
+```sh
+docker run -it \
+  -e PBF_URL=https://download.geofabrik.de/europe/monaco-latest.osm.pbf \
+  -e IMPORT_WIKIPEDIA=/nominatim/extras/wikimedia-importance.sql.gz \
+  -p 8080:8080 \
+  -v /osm-maps/extras:/nominatim/extras \
+  --name nominatim \
+  mediagis/nominatim:4.3
+```
+
+Where the path to the importance dump is given relative to the container. (The file does not need to be named `wikimedia-importance.sql.gz`.) The same works for `IMPORT_US_POSTCODES` and `IMPORT_GB_POSTCODES`.
+
+For more information about the Tiger address file, see [Installing TIGER housenumber data for the US](https://nominatim.org/release-docs/4.3.1/customize/Tiger/).
+
+## Development
+
+If you want to work on the Docker image you can use the following command to build a local
+image and run the container with
+
+```sh
+docker build -t nominatim . && \
+docker run -it \
+    -e PBF_URL=https://download.geofabrik.de/europe/monaco-latest.osm.pbf \
+    -e REPLICATION_URL=https://download.geofabrik.de/europe/monaco-updates/ \
+    -p 8080:8080 \
+    --name nominatim \
+    nominatim
+```
+
+## Docker Compose
+
+In addition, we also provide a basic `contrib/docker-compose.yml` template which you use as a starting point and adapt to your needs. Use this template to set the environment variables, mounts, etc. as needed.
+
+Besides the basic docker-compose.yml, there are also some advanced YAML configurations available in the `contrib` folder.
+These files follow the naming convention of `docker-compose-*.yml` and contain comments about the specific use case.
+
+## Assorted use cases documented in issues
+
+- [Using an external Postgres database](https://github.com/mediagis/nominatim-docker/issues/245#issuecomment-1072205751)
+  - [Using Amazon's RDS](https://github.com/mediagis/nominatim-docker/issues/378#issuecomment-1278653770)
+- [Hardware sizing for importing the entire planet](https://github.com/mediagis/nominatim-docker/discussions/265)
+- [Upgrading Nominatim](https://github.com/mediagis/nominatim-docker/discussions/317)
+- [Using Nominatim UI](https://github.com/mediagis/nominatim-docker/discussions/486#discussioncomment-7239861)
+
